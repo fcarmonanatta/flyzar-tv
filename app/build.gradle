@@ -1,0 +1,43 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'ar.com.flyzar.tvdisplay'
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "ar.com.flyzar.tvdisplay"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    signingConfigs {
+        release {
+            storeFile file("flyzar.jks")
+            storePassword "flyzar2026"
+            keyAlias "flyzar"
+            keyPassword "flyzar2026"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    applicationVariants.all { variant ->
+        variant.outputs.all { output ->
+            outputFileName = "flyzar-tv-${variant.versionName}.apk"
+        }
+    }
+}
