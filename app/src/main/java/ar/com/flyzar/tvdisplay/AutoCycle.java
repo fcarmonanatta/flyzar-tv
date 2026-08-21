@@ -72,9 +72,10 @@ public class AutoCycle {
         running = true;
         index = 0;
         final int myGen = ++generation;
-        // damos unos segundos a que el mapa termine de dibujarse
+        // damos unos segundos a que el mapa dibuje, y despues chequeamos
+        // que los controles existan antes de empezar a clickear
         handler.postDelayed(() -> {
-            if (running && myGen == generation) runStep(myGen);
+            if (running && myGen == generation) waitUntilReady(myGen);
         }, 8_000L);
     }
 
@@ -92,6 +93,26 @@ public class AutoCycle {
             if (log != null) log.onStep("Ciclo reanudado");
             start();
         }
+    }
+
+    /**
+     * Si el avion no esta volando, FlightPath3D deshabilita los controles y no
+     * hay nada que clickear. En vez de disparar la secuencia al vacio,
+     * chequeamos cada 30 s hasta que aparezcan.
+     */
+    private void waitUntilReady(final int myGen) {
+        if (!running || myGen != generation) return;
+        web.evaluateJavascript(JS + "\ntry{__fz.ready()}catch(e){false}", value -> {
+            if (!running || myGen != generation) return;
+            if (value != null && value.contains("true")) {
+                if (log != null) log.onStep("Controles detectados: arranca el ciclo");
+                index = 0;
+                runStep(myGen);
+            } else {
+                if (log != null) log.onStep("Controles no disponibles (avion en tierra) - reintento en 30 s");
+                handler.postDelayed(() -> waitUntilReady(myGen), 30_000L);
+            }
+        });
     }
 
     private void runStep(final int myGen) {
@@ -121,7 +142,12 @@ public class AutoCycle {
         }
 
         index = (index + 1) % STEPS.length;
-        handler.postDelayed(() -> runStep(myGen), duration);
+        if (index == 0) {
+            // termino una vuelta entera: revalidamos antes de la siguiente
+            handler.postDelayed(() -> waitUntilReady(myGen), duration);
+        } else {
+            handler.postDelayed(() -> runStep(myGen), duration);
+        }
     }
 
     private void eval(String call, String description) {
@@ -230,6 +256,17 @@ public class AutoCycle {
           return F.tap(F.clickable(e));
         };
 
+        /* true si la interfaz esta viva (avion volando). Pedimos al menos
+           dos de los cuatro controles conocidos para evitar falsos negativos */
+        F.ready = function(){
+          var keys = ['cockpit','location','clock','route'];
+          var hits = 0;
+          for (var i=0; i<keys.length; i++){
+            if (F.find(F.labels[keys[i]])) hits++;
+          }
+          return hits >= 2;
+        };
+
         F.open = function(key){
           var ok = F.clickLabel(F.labels[key] || []);
           return ok ? 'ok' : 'miss';
@@ -243,6 +280,9 @@ public class AutoCycle {
            abajo a la izquierda */
         F.baseGeneralView = function(){
           if (F.clickLabel(F.labels.general)) return 'ok';
+          /* sin controles vivos no arriesgamos la heuristica: podria clickear
+             cualquier cosa que este en el margen inferior izquierdo */
+          if (!F.ready()) return 'miss';
           var nodes = document.querySelectorAll('img,svg,button,[role="button"],div');
           var best = null, bestScore = Infinity;
           for (var i=0; i<nodes.length; i++){
