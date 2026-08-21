@@ -16,11 +16,12 @@ import android.view.View;
 import android.view.WindowManager;
 import android.webkit.CookieManager;
 import android.webkit.WebChromeClient;
-import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceError;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -28,18 +29,17 @@ import android.widget.Toast;
 
 public class MainActivity extends Activity {
 
-    /* ------------------------------------------------------------------
-     * URL por defecto. Si la dejás vacía, la primera vez que abras la app
-     * te va a pedir que la cargues. Igual siempre la podés cambiar despues
-     * (3 veces ATRAS con el control, o por adb).
-     * ------------------------------------------------------------------ */
+    /* URL por defecto. Se puede cambiar sin recompilar: ATRAS x3, o por adb. */
     private static final String DEFAULT_URL = "https://lvveg.flightpath3d.biz";
 
     private static final String PREFS = "flyzar_tv";
     private static final String KEY_URL = "url";
     private static final String KEY_REFRESH = "refresh_min";
+    private static final String KEY_CYCLE = "cycle";
+    private static final String KEY_DEBUG = "debug";
 
     private WebView web;
+    private AutoCycle cycle;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private Runnable refreshTask;
     private Runnable retryTask;
@@ -66,21 +66,28 @@ public class MainActivity extends Activity {
         s.setDisplayZoomControls(false);
         s.setMediaPlaybackRequiresUserGesture(false);
         s.setMixedContentMode(WebSettings.MIXED_CONTENT_ALWAYS_ALLOW);
-        s.setCacheMode(WebSettings.LOAD_DEFAULT);
 
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
+
+        cycle = new AutoCycle(web, this::debugToast);
 
         web.setWebChromeClient(new WebChromeClient());
         web.setWebViewClient(new WebViewClient() {
             @Override
             public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest r) {
-                return false; // todo adentro de la misma WebView
+                return false;
+            }
+
+            @Override
+            public void onPageFinished(WebView v, String url) {
+                if (isCycleEnabled()) cycle.start();
             }
 
             @Override
             public void onReceivedError(WebView v, WebResourceRequest req, WebResourceError err) {
                 if (req != null && !req.isForMainFrame()) return;
+                cycle.stop();
                 showOffline();
                 scheduleRetry();
             }
@@ -97,14 +104,11 @@ public class MainActivity extends Activity {
         handleIntent(intent);
     }
 
-    /* Permite cambiar la URL sin recompilar, desde la compu:
-     * adb shell am start -a android.intent.action.VIEW \
-     *   -d "https://tu-url" -n ar.com.flyzar.tvdisplay/.MainActivity   */
     private void handleIntent(Intent intent) {
         if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction())) {
             Uri data = intent.getData();
             if (data != null) {
-                saveUrl(data.toString());
+                prefs().edit().putString(KEY_URL, data.toString()).apply();
                 Toast.makeText(this, "URL actualizada", Toast.LENGTH_SHORT).show();
             }
         }
@@ -127,15 +131,23 @@ public class MainActivity extends Activity {
         return prefs().getString(KEY_URL, DEFAULT_URL);
     }
 
-    private void saveUrl(String url) {
-        prefs().edit().putString(KEY_URL, url).apply();
-    }
-
     private int getRefreshMinutes() {
         return prefs().getInt(KEY_REFRESH, 0);
     }
 
-    /* ---------------- recarga automatica ---------------- */
+    private boolean isCycleEnabled() {
+        return prefs().getBoolean(KEY_CYCLE, true);
+    }
+
+    private boolean isDebug() {
+        return prefs().getBoolean(KEY_DEBUG, false);
+    }
+
+    private void debugToast(String msg) {
+        if (isDebug()) Toast.makeText(this, msg, Toast.LENGTH_SHORT).show();
+    }
+
+    /* ---------------- recarga / reintentos ---------------- */
 
     private void scheduleRefresh() {
         if (refreshTask != null) handler.removeCallbacks(refreshTask);
@@ -153,12 +165,9 @@ public class MainActivity extends Activity {
 
     private void scheduleRetry() {
         if (retryTask != null) handler.removeCallbacks(retryTask);
-        retryTask = new Runnable() {
-            @Override
-            public void run() {
-                String url = getUrl();
-                if (!url.isEmpty()) web.loadUrl(url);
-            }
+        retryTask = () -> {
+            String url = getUrl();
+            if (!url.isEmpty()) web.loadUrl(url);
         };
         handler.postDelayed(retryTask, 10_000L);
     }
@@ -175,23 +184,32 @@ public class MainActivity extends Activity {
 
     @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
-        if (keyCode == KeyEvent.KEYCODE_MENU) {
-            openSettings();
-            return true;
-        }
-        if (keyCode == KeyEvent.KEYCODE_BACK) {
-            long now = System.currentTimeMillis();
-            backPresses = (now - lastBack < 2000) ? backPresses + 1 : 1;
-            lastBack = now;
-            if (backPresses >= 3) {
-                backPresses = 0;
+        switch (keyCode) {
+            case KeyEvent.KEYCODE_MENU:
                 openSettings();
-            }
-            return true; // kiosco: ATRAS nunca cierra la app
-        }
-        if (keyCode == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE) {
-            web.reload();
-            return true;
+                return true;
+
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+                cycle.toggle();
+                Toast.makeText(this,
+                        cycle.isRunning() ? "Ciclo automatico: ON" : "Ciclo automatico: PAUSA",
+                        Toast.LENGTH_SHORT).show();
+                return true;
+
+            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                web.reload();
+                return true;
+
+            case KeyEvent.KEYCODE_BACK:
+                long now = System.currentTimeMillis();
+                backPresses = (now - lastBack < 2000) ? backPresses + 1 : 1;
+                lastBack = now;
+                if (backPresses >= 3) {
+                    backPresses = 0;
+                    openSettings();
+                }
+                return true; // kiosco: ATRAS nunca cierra la app
         }
         return super.onKeyDown(keyCode, event);
     }
@@ -216,10 +234,20 @@ public class MainActivity extends Activity {
         refreshField.setSingleLine(true);
         refreshField.setText(String.valueOf(getRefreshMinutes()));
 
+        final CheckBox cycleBox = new CheckBox(this);
+        cycleBox.setText("Ciclo automatico");
+        cycleBox.setChecked(isCycleEnabled());
+
+        final CheckBox debugBox = new CheckBox(this);
+        debugBox.setText("Mostrar avisos de cada paso (debug)");
+        debugBox.setChecked(isDebug());
+
         box.addView(l1);
         box.addView(urlField);
         box.addView(l2);
         box.addView(refreshField);
+        box.addView(cycleBox);
+        box.addView(debugBox);
 
         new AlertDialog.Builder(this)
                 .setTitle("Configuracion")
@@ -231,7 +259,13 @@ public class MainActivity extends Activity {
                         min = Integer.parseInt(refreshField.getText().toString().trim());
                     } catch (NumberFormatException ignored) {
                     }
-                    prefs().edit().putString(KEY_URL, url).putInt(KEY_REFRESH, min).apply();
+                    prefs().edit()
+                            .putString(KEY_URL, url)
+                            .putInt(KEY_REFRESH, min)
+                            .putBoolean(KEY_CYCLE, cycleBox.isChecked())
+                            .putBoolean(KEY_DEBUG, debugBox.isChecked())
+                            .apply();
+                    cycle.stop();
                     if (!url.isEmpty()) {
                         web.loadUrl(url);
                         scheduleRefresh();
@@ -261,6 +295,7 @@ public class MainActivity extends Activity {
 
     @Override
     protected void onDestroy() {
+        if (cycle != null) cycle.stop();
         handler.removeCallbacksAndMessages(null);
         if (web != null) web.destroy();
         super.onDestroy();
