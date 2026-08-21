@@ -10,8 +10,8 @@ android {
         applicationId "ar.com.flyzar.tvdisplay"
         minSdk 21
         targetSdk 34
-        versionCode 1
-        versionName "1.0"
+        versionCode 12
+        versionName "1.2"
     }
 
     signingConfigs {
